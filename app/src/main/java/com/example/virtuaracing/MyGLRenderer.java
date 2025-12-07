@@ -353,16 +353,17 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
         if(routePoints.isEmpty()) return;
         Random rand = new Random();
 
-        // Recorremos la ruta y cada X pasos ponemos algo
-        for (int i = 0; i < routePoints.size(); i+= 5) { // Cada 5 puntos
+        // Recorremos la ruta y cada 'i' pasos ponemos algo
+        for (int i = 0; i < routePoints.size(); i+= 7) { // Cada 8 puntos
             Vector4 p = routePoints.get(i);
-            Vector4 nextP = routePoints.get((i+1)%routePoints.size());
+            Vector4 nextP = routePoints.get((i+1)%routePoints.size());//evitamos error de índice al buscar el siguiente punto
 
             // Vector dirección
             float dx = nextP.get(0) - p.get(0);
             float dz = nextP.get(2) - p.get(2);
             // Normalizar
             float len = (float)Math.sqrt(dx*dx + dz*dz);
+            if (len == 0) continue;
             dx /= len; dz /= len;
 
             // Vector perpendicular (Izquierda/Derecha)
@@ -371,20 +372,20 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
 
             // LADO DERECHO (Árboles)
             if (rand.nextFloat() > 0.3f) { // 70% probabilidad
-                float dist = 15 + rand.nextFloat() * 20; // Entre 15 y 35 metros del centro
+                float dist = 7 + rand.nextFloat() * 9.0f; // Entre 15 y 35 metros del centro
                 float objX = p.get(0) + perpX * dist;
                 float objZ = p.get(2) + perpZ * dist;
                 sceneryItems.add(new SceneryItem(new Vector4(objX, p.get(1), objZ, 1), 0)); // Tipo 0 = Árbol
             }
 
             // LADO IZQUIERDO (Gradas a veces, árboles otras)
-            if (rand.nextFloat() > 0.5f) {
-                float dist = -15 - rand.nextFloat() * 15; // Lado contrario (negativo)
+            if (rand.nextFloat() > 0.6f) {
+                float dist = -8 - rand.nextFloat() * 10.0f; // Lado contrario (negativo)
                 float objX = p.get(0) + perpX * dist;
                 float objZ = p.get(2) + perpZ * dist;
 
                 // Tipo 1 (Grada) si toca, o 0 (Árbol)
-                int type = (rand.nextFloat() > 0.8f) ? 1 : 0;
+                int type = (rand.nextFloat() > 0.5f) ? 1 : 0;
                 sceneryItems.add(new SceneryItem(new Vector4(objX, p.get(1), objZ, 1), type));
             }
         }
