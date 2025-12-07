@@ -62,6 +62,10 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
     // Variables globales de animación
     private float globalWheelRotation = 0;
 
+    // --- HUD ---
+    private TextureRect hudElement; //cuadrado genérico
+    private int texSpeedBG, texNeedle, texPos;
+
     public MyGLRenderer(Context context) {
         this.context = context;
     }
@@ -107,6 +111,14 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
         sunLight.setPosition(new float[]{50.0f, 200.0f, 50.0f, 0.0f});
         sunLight.setAmbientColor(new float[]{0.4f, 0.4f, 0.4f});
         sunLight.setDiffuseColor(new float[]{1.0f, 1.0f, 1.0f});
+
+        // Cargar texturas HUD
+        texSpeedBG = loadTexture(gl, context, R.raw.hud_speed_bg);
+        texNeedle = loadTexture(gl, context, R.raw.hud_needle);
+        texPos = loadTexture(gl, context, R.raw.hud_pos);
+
+        // Inicializar el cuadrado del HUD
+        hudElement = new TextureRect();
     }
 
     @Override
@@ -177,6 +189,9 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
         float rival2Prog = playerProgress - 15;
         if(rival2Prog < 0) rival2Prog += routePoints.size();
         drawCar(gl, rival2Prog, 3.5f, 0.5f);
+
+        // HUD
+        drawHUD(gl);
     }
 
     // --- MÉTODOS DE DIBUJO ---
@@ -265,6 +280,65 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
                 gl.glPopMatrix();
             }
         }
+    }
+
+    private void drawHUD(GL10 gl) {
+        // 1. CAMBIAR A MODO 2D (Ortho)
+        gl.glDisable(GL10.GL_DEPTH_TEST); //dibujar encima de todo
+        gl.glDisable(GL10.GL_LIGHTING);   //el HUD no tiene sombras
+        gl.glEnable(GL10.GL_BLEND); //activar la mezcla de píxeles para que el canal Alpha/transparencia funcione
+        gl.glBlendFunc(GL10.GL_SRC_ALPHA, GL10.GL_ONE_MINUS_SRC_ALPHA);
+
+        gl.glMatrixMode(GL10.GL_PROJECTION);
+        gl.glPushMatrix(); //guarda cámara 3D
+        gl.glLoadIdentity();
+        // Configuramos pantalla: 0 a width (ancho), 0 a height (alto)
+        gl.glOrthof(0, width, 0, height, -1, 1);
+
+        gl.glMatrixMode(GL10.GL_MODELVIEW);
+        gl.glLoadIdentity();
+
+        // 2. DIBUJAR POSICIÓN "2nd", arriba Izquierda
+        bindTexture(gl, texPos);
+        gl.glPushMatrix();
+        gl.glTranslatef(10, height - 500, 0); // Posición X, Y (px)
+        gl.glScalef(800, 400, 1);             // Tamaño Ancho, Alto (px)
+        hudElement.draw(gl);
+        gl.glPopMatrix();
+
+        // 3. DIBUJAR VELOCÍMETRO - Abajo Derecha
+
+        // A) El Fondo (Arco)
+        bindTexture(gl, texSpeedBG);
+        gl.glPushMatrix();
+        gl.glTranslatef(width - 500, 50, 0); // Esquina inferior derecha
+        gl.glScalef(450, 225, 1);            // Tamaño 300x300 px
+        hudElement.draw(gl);
+
+        // B) La Aguja (Animada)
+        // Simulamos velocidad oscilante
+        float speedSim = 200 + (float)Math.sin(globalWheelRotation * 0.8f) * 30; // 180-220 km/h
+        float needleAngle = -90 + (speedSim * 0.6f); // Calibración (Ajustar según tu dibujo)
+
+        gl.glPopMatrix(); // Volvemos al origen del velocímetro para dibujar la aguja encima
+
+        bindTexture(gl, texNeedle);
+        gl.glPushMatrix();
+        // mover al centro del velocímetro (width- 550 + mitad_ancho)
+        gl.glTranslatef(width - 550 + 250, 80, 0);
+        gl.glRotatef(-needleAngle, 0, 0, 1); // Rotación Z en 2D
+        gl.glTranslatef(-10, 0, 0); // Ajuste fino para centrar el pivote de la aguja
+        gl.glScalef(120, 180, 1);    // Aguja fina y larga
+        hudElement.draw(gl);
+        gl.glPopMatrix();
+
+        // 4. RESTAURAR MODO 3D
+        gl.glEnable(GL10.GL_DEPTH_TEST);
+        gl.glEnable(GL10.GL_LIGHTING);
+
+        gl.glMatrixMode(GL10.GL_PROJECTION);
+        gl.glPopMatrix(); // Recuperamos cámara 3D
+        gl.glMatrixMode(GL10.GL_MODELVIEW);
     }
 
     // --- LÓGICA MATEMÁTICA ---
@@ -430,5 +504,53 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
                 }
             }
         } catch (IOException e) {}
+    }
+
+    // Clase auxiliar para dibujar elementos 2D (HUD)
+    class TextureRect {
+        private FloatBuffer vertexBuffer;
+        private FloatBuffer textureBuffer;
+
+        // Coordenadas cuadradas simples
+        private float vertices[] = {
+                0.0f, 0.0f, 0.0f,  // Abajo-Izq
+                1.0f, 0.0f, 0.0f,  // Abajo-Der
+                0.0f, 1.0f, 0.0f,  // Arriba-Izq
+                1.0f, 1.0f, 0.0f   // Arriba-Der
+        };
+
+        private float textureCoords[] = {
+                0.0f, 1.0f,  //invertir Y para que la imagen no salga al revés
+                1.0f, 1.0f,
+                0.0f, 0.0f,
+                1.0f, 0.0f
+        };
+
+        public TextureRect() {
+            ByteBuffer vbb = ByteBuffer.allocateDirect(vertices.length * 4);
+            vbb.order(ByteOrder.nativeOrder());
+            vertexBuffer = vbb.asFloatBuffer();
+            vertexBuffer.put(vertices);
+            vertexBuffer.position(0);
+
+            ByteBuffer tbb = ByteBuffer.allocateDirect(textureCoords.length * 4);
+            tbb.order(ByteOrder.nativeOrder());
+            textureBuffer = tbb.asFloatBuffer();
+            textureBuffer.put(textureCoords);
+            textureBuffer.position(0);
+        }
+
+        public void draw(GL10 gl) {
+            gl.glEnableClientState(GL10.GL_VERTEX_ARRAY);
+            gl.glEnableClientState(GL10.GL_TEXTURE_COORD_ARRAY);
+
+            gl.glVertexPointer(3, GL10.GL_FLOAT, 0, vertexBuffer);
+            gl.glTexCoordPointer(2, GL10.GL_FLOAT, 0, textureBuffer);
+
+            gl.glDrawArrays(GL10.GL_TRIANGLE_STRIP, 0, 4);
+
+            gl.glDisableClientState(GL10.GL_VERTEX_ARRAY);
+            gl.glDisableClientState(GL10.GL_TEXTURE_COORD_ARRAY);
+        }
     }
 }
