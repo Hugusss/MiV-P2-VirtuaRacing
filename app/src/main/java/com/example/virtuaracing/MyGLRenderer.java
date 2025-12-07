@@ -40,6 +40,7 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
     private Vector4 carPosition = new Vector4(0,0,0,1);
     private float carRotationY = 0;   // Ángulo hacia donde mira el coche
     private float wheelRotation = 0;  // Giro de las ruedas al avanzar
+    private float steeringAngle = 0f; // Ángulo de giro de las ruedas delanteras
 
     // Cámara
     private Camera camera;
@@ -58,24 +59,23 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
         gl.glClearDepthf(1.0f);
         gl.glEnable(GL10.GL_DEPTH_TEST);
         gl.glDepthFunc(GL10.GL_LEQUAL);
-        gl.glEnable(GL10.GL_CULL_FACE); // Optimización: no dibujar caras traseras
+        gl.glEnable(GL10.GL_CULL_FACE); //no dibujar caras traseras
         gl.glShadeModel(GL10.GL_SMOOTH);
 
         //Cargar Texturas
         textureIdAtlas = loadTexture(gl, context, R.raw.texture_atlas_sq);
-        textureIdSky = loadTexture(gl, context, R.raw.sky_rural);          //para cielo
+        textureIdSky = loadTexture(gl, context, R.raw.sky_rural);   //para cielo
 
         //Cargar Modelos OBJ
-        // Importante: Object3D debe estar preparado para no fallar si no hay MTL
         try {
             road = new Object3D(context, R.raw.road);
             sky = new Object3D(context, R.raw.sky);
-            carChassis = new Object3D(context, R.raw.chassis); // Nombre en minúsculas
+            carChassis = new Object3D(context, R.raw.chassis);
             carWheel = new Object3D(context, R.raw.wheel);
             tree = new Object3D(context, R.raw.tree);
             stand = new Object3D(context, R.raw.stand);
 
-            // Cargar la ruta lógica (parseo especial)
+            // Cargar la ruta lógica
             loadRoutePoints(context, R.raw.route);
 
         } catch (Exception e) {
@@ -115,7 +115,7 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
         gl.glClear(GL10.GL_COLOR_BUFFER_BIT | GL10.GL_DEPTH_BUFFER_BIT);
         gl.glLoadIdentity();
 
-        // --- A. ACTUALIZAR LÓGICA (Mover coche) ---
+        // --- A. ACTUALIZAR LÓGICA (mover coche) ---
         updateCarPhysics();
 
         // --- B. CÁMARA ---
@@ -139,10 +139,9 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
 
         // --- C. DIBUJAR ESCENA ---
 
-        // 1. DIBUJAR CIELO (Sin luces, para que se vea brillante siempre)
+        // 1. DIBUJAR CIELO
         gl.glDisable(GL10.GL_LIGHTING);
         gl.glPushMatrix();
-        // El cielo sigue al coche para que nunca lleguemos al final
         gl.glTranslatef(carPosition.get(0), 0, carPosition.get(2));
         bindTexture(gl, textureIdSky);
         if(sky != null) sky.draw(gl);
@@ -154,7 +153,6 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
         if(road != null) road.draw(gl);
 
         // 3. DIBUJAR ÁRBOLES Y GRADAS
-        // Aquí simulamos dibujando varios árboles manualmente
         drawDecorations(gl);
 
         // 4. DIBUJAR COCHE
@@ -165,7 +163,7 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
         // Chasis
         if(carChassis != null) carChassis.draw(gl);
 
-        // Ruedas (Animación de giro y posición relativa)
+        // Ruedas (animación de giro y posición relativa)
         drawWheels(gl);
 
         gl.glPopMatrix();
@@ -175,76 +173,65 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
     private void updateCarPhysics() {
         if (routePoints.size() < 2) return;
 
-        // Avanzar progreso (velocidad)
-        float speed = 0.5f; //ajustar esto para ir más rápido o lento
+        // --- 1. AVANCE ---
+        float speed = 0.4f;
         carProgress += speed;
-
-        // Loop del circuito
         if (carProgress >= routePoints.size() - 1) {
             carProgress = 0;
         }
 
-        // Interpolación lineal entre el punto actual y el siguiente
+        // --- 2. POSICIÓN E INTERPOLACIÓN ---
         int idx = (int) carProgress;
         int nextIdx = (idx + 1) % routePoints.size();
-        float t = carProgress - idx; // Decimal (0.0 a 0.99)
+        float t = carProgress - idx;
 
         Vector4 p1 = routePoints.get(idx);
         Vector4 p2 = routePoints.get(nextIdx);
 
-        // Posición Interpolada
+        // Posición del coche
         float x = p1.get(0) * (1-t) + p2.get(0) * t;
-        float y = p1.get(1) * (1-t) + p2.get(1) * t; // Si el circuito tiene altura
+        float y = p1.get(1) * (1-t) + p2.get(1) * t;
         float z = p1.get(2) * (1-t) + p2.get(2) * t;
         carPosition = new Vector4(x, y, z, 1);
 
-        // Calcular ángulo de rotación (mirar hacia el siguiente punto)
+        // --- 3. ROTACIÓN DEL CHASIS ---
         double dx = p2.get(0) - p1.get(0);
         double dz = p2.get(2) - p1.get(2);
-        // Math.atan2 devuelve radianes, convertimos a grados
-        carRotationY = (float) Math.toDegrees(Math.atan2(dx, dz));
+        float currentHeading = (float) Math.toDegrees(Math.atan2(dx, dz));
+        carRotationY = currentHeading;
 
-        // Girar ruedas
-        wheelRotation += speed * 20;
+        // --- 4. CÁLCULO DE GIRO DE RUEDAS (Look Ahead) ---
+        // Miramos hacia el SIGUIENTE segmento para anticipar la curva
+        int nextNextIdx = (nextIdx + 1) % routePoints.size();
+        Vector4 p3 = routePoints.get(nextNextIdx);
+
+        double dxNext = p3.get(0) - p2.get(0);
+        double dzNext = p3.get(2) - p2.get(2);
+        float futureHeading = (float) Math.toDegrees(Math.atan2(dxNext, dzNext));
+
+        // Calculamos la diferencia (cuánto cambia la curva)
+        float angleDiff = futureHeading - currentHeading;
+
+        // Corregir el salto de 360 a 0 grados
+        while (angleDiff < -180) angleDiff += 360;
+        while (angleDiff > 180) angleDiff -= 360;
+
+        // SUAVIZADO Y AMPLIFICACIÓN
+        // Multiplicar por 3.0f para que se note más el giro visualmente
+        //limitar a 40 grados para que no se rompan las ruedas
+        float targetSteer = angleDiff * 3.0f;
+
+        // Clamp (Límite máximo de giro)
+        if (targetSteer > 40) targetSteer = 40;
+        if (targetSteer < -40) targetSteer = -40;
+
+        // Interpolación simple para que el volante no tiemble
+        steeringAngle = steeringAngle * 0.8f + targetSteer * 0.5f;
+
+        // Girar ruedas sobre su eje X (velocidad)
+        wheelRotation += speed * 30;
     }
 
-    /*private void drawWheels(GL10 gl) {
-        if(carWheel == null) return;
-
-        // Ajustes de posición de ruedas respecto al centro del coche
-        float wX = 2f; // Ancho hacia los lados
-        float wY = 1.0f; // Altura desde el suelo
-        float wZ = 2.5f; // Distancia ejes delantero/trasero
-
-        // Rueda Trasera Izquierda
-        gl.glPushMatrix();
-        gl.glTranslatef(-wX, wY, -wZ); // Posición relativa
-        gl.glRotatef(wheelRotation, 1, 0, 0); // Girar al avanzar
-        gl.glRotatef(180, 0, 1, 0); // Espejo visual para la cara de llanta
-        carWheel.draw(gl);
-        gl.glPopMatrix();
-
-        // Rueda Trasera Derecha
-        gl.glPushMatrix();
-        gl.glTranslatef(wX, wY, -wZ);
-        gl.glRotatef(wheelRotation, 1, 0, 0);
-        carWheel.draw(gl);
-        gl.glPopMatrix();
-
-        // Ruedas Delanteras
-        gl.glPushMatrix();
-        gl.glTranslatef(-wX*0.8f, wY, wZ*1.35f);
-        gl.glRotatef(wheelRotation, 1, 0, 0);
-        gl.glRotatef(180, 0, 1, 0);
-        carWheel.draw(gl);
-        gl.glPopMatrix();
-
-        gl.glPushMatrix();
-        gl.glTranslatef(wX*0.8f, wY, wZ*1.35f);
-        gl.glRotatef(wheelRotation, 1, 0, 0);
-        carWheel.draw(gl);
-        gl.glPopMatrix();
-    }*/
     private void drawWheels(GL10 gl) {
         if(carWheel == null) return;
 
@@ -253,13 +240,13 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
         float wY = 1.0f;
         float wZ = 2.5f;
 
-        // ÁNGULO Toe-in "/ \"
+        //efecto ÁNGULO Toe-in "/ \"
         float toeAngle = 6.0f;
 
         // --- Rueda Delantera Izquierda ---
         gl.glPushMatrix();
         gl.glTranslatef(wX*0.8f, wY, wZ*1.35f);
-        gl.glRotatef(-toeAngle, 0, 1, 0); // Rotar hacia adentro (eje Y)
+        gl.glRotatef(-toeAngle + steeringAngle, 0, 1, 0); // Rotar hacia adentro (eje Y)
         gl.glRotatef(wheelRotation, 1, 0, 0); // Girar por velocidad (eje X)
         carWheel.draw(gl);
         gl.glPopMatrix();
@@ -267,7 +254,7 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
         // --- Rueda Delantera Derecha ---
         gl.glPushMatrix();
         gl.glTranslatef(-wX*0.8f, wY, wZ*1.35f);
-        gl.glRotatef(180 + toeAngle, 0, 1, 0); // Espejo + inclinación
+        gl.glRotatef(180 + toeAngle + steeringAngle, 0, 1, 0); // Espejo + inclinación
         gl.glRotatef(wheelRotation, 1, 0, 0);  // Girar velocidad
         carWheel.draw(gl);
         gl.glPopMatrix();
@@ -276,7 +263,7 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
         // Trasera Izquierda
         gl.glPushMatrix();
         gl.glTranslatef(-wX, wY, -wZ);
-        gl.glRotatef(wheelRotation, 1, 0, 0); // Sin toe-in atrás (habitual en coches)
+        gl.glRotatef(wheelRotation, 1, 0, 0);
         carWheel.draw(gl);
         gl.glPopMatrix();
 
@@ -357,16 +344,14 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
         String line;
         try {
             while ((line = reader.readLine()) != null) {
-                if (line.startsWith("v ")) { // Solo nos interesan los vértices
+                if (line.startsWith("v ")) { // solo vértices
                     String[] parts = line.split("\\s+");
                     float x = Float.parseFloat(parts[1]);
-                    float z = Float.parseFloat(parts[2]); // Blender Z es Y, y Y es Z...
+                    float z = Float.parseFloat(parts[2]); //blender Z es Y, y Y es Z...
                     float y = Float.parseFloat(parts[3]);
 
                     // Ajuste de ejes Blender -> Android (Y-up vs Z-up swap)
-                    // En exportación pusimos -Z Forward, Y Up.
-                    // Si el path sale raro, intercambia Y por Z aquí.
-                    // Probaremos directo primero:
+                    // En exportación se marca -Z Forward, Y Up
                     routePoints.add(new Vector4(x, z, y, 1));
                 }
             }
