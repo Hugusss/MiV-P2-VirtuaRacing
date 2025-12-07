@@ -15,14 +15,17 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.FloatBuffer;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Random;
 
 public class MyGLRenderer implements GLSurfaceView.Renderer {
 
     private Context context;
     private int width, height;
-    float Z = 1;
 
     // --- OBJETOS 3D ---
     private Object3D road, sky, carChassis, carWheel, tree, stand;
@@ -31,22 +34,33 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
     private int textureIdAtlas = -1;
     private int textureIdSky = -1;
 
-    // --- LOGICA DE RUTA Y COCHE ---
-    // Lista de puntos por donde pasará el coche
+    // --- LÓGICA DE RUTA ---
     private List<Vector4> routePoints = new ArrayList<>();
 
-    // coche status
-    private float carProgress = 0.0f; // Índice actual en la ruta
-    private Vector4 carPosition = new Vector4(0,0,0,1);
-    private float carRotationY = 0;   // Ángulo hacia donde mira el coche
-    private float wheelRotation = 0;  // Giro de las ruedas al avanzar
-    private float steeringAngle = 0f; // Ángulo de giro de las ruedas delanteras
+    // --- LÓGICA DEL JUGADOR ---
+    private float playerProgress = 0.0f;
+    private Vector4 playerPos = new Vector4(0,0,0,1);
+    private float playerRotY = 0;
 
-    // Cámara
+    // --- ESCENARIO Y CULLING ---
+    //clase auxiliar para guardar posición y tipo de objeto (0=arbol, 1=grada)
+    private static class SceneryItem {
+        Vector4 position;
+        int type;
+        public SceneryItem(Vector4 p, int t) { position = p; type = t; }
+    }
+    private List<SceneryItem> sceneryItems = new ArrayList<>();
+    private float RENDER_DISTANCE = 45.0f; //distancia de pop-up
+
+    // --- CÁMARA ---
     private Camera camera;
+    private boolean isOverheadView = false; // Para cambiar de cámara luego
 
-    // Luces
+    // --- LUCES ---
     private Light sunLight;
+
+    // Variables globales de animación
+    private float globalWheelRotation = 0;
 
     public MyGLRenderer(Context context) {
         this.context = context;
@@ -54,19 +68,17 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
 
     @Override
     public void onSurfaceCreated(GL10 gl, EGLConfig config) {
-        // Configuración básica OpenGL
-        gl.glClearColor(0.5f, 0.7f, 1.0f, 1.0f); // Fondo azul cielo por defecto
+        gl.glClearColor(0.5f, 0.7f, 1.0f, 1.0f);
         gl.glClearDepthf(1.0f);
         gl.glEnable(GL10.GL_DEPTH_TEST);
         gl.glDepthFunc(GL10.GL_LEQUAL);
-        gl.glEnable(GL10.GL_CULL_FACE); //no dibujar caras traseras
         gl.glShadeModel(GL10.GL_SMOOTH);
 
-        //Cargar Texturas
+        // Cargar Texturas
         textureIdAtlas = loadTexture(gl, context, R.raw.texture_atlas_sq);
-        textureIdSky = loadTexture(gl, context, R.raw.sky_rural);   //para cielo
+        textureIdSky = loadTexture(gl, context, R.raw.sky_rural);
 
-        //Cargar Modelos OBJ
+        // Cargar Modelos
         try {
             road = new Object3D(context, R.raw.road);
             sky = new Object3D(context, R.raw.sky);
@@ -75,23 +87,26 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
             tree = new Object3D(context, R.raw.tree);
             stand = new Object3D(context, R.raw.stand);
 
-            // Cargar la ruta lógica
             loadRoutePoints(context, R.raw.route);
 
+            // GENERAR ESCENARIO AUTOMÁTICO ALREDEDOR DE LA RUTA
+            generateScenery();
+
         } catch (Exception e) {
-            Log.e("MyGLRenderer", "Error cargando objetos: " + e.getMessage());
+            Log.e("MyGLRenderer", "Error: " + e.getMessage());
         }
 
-        //Configurar Cámara Inicial
-        camera = new Camera(gl, new Vector4(0, 10, -20, 1), new Vector4(0, 0, 0, 1), new Vector4(0, 1, 0, 0));
+        camera = new Camera(gl,new Vector4(0, 10, -20, 1),
+                            new Vector4(0, 0, 0, 1),
+                            new Vector4(0, 1, 0, 0));
 
-        // Configurar Luz
+        // Luz
         gl.glEnable(GL10.GL_LIGHTING);
         gl.glEnable(GL10.GL_LIGHT0);
         sunLight = new Light(gl, GL10.GL_LIGHT0);
-        sunLight.setPosition(new float[]{100.0f, 200.0f, 100.0f, 0.0f}); // Luz direccional
-        sunLight.setAmbientColor(new float[]{0.3f, 0.3f, 0.3f}); // Ambiente suave
-        sunLight.setDiffuseColor(new float[]{1.0f, 1.0f, 1.0f}); // Luz blanca
+        sunLight.setPosition(new float[]{50.0f, 200.0f, 50.0f, 0.0f});
+        sunLight.setAmbientColor(new float[]{0.4f, 0.4f, 0.4f});
+        sunLight.setDiffuseColor(new float[]{1.0f, 1.0f, 1.0f});
     }
 
     @Override
@@ -100,12 +115,10 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
         this.width = width;
         this.height = height;
         float aspect = (float) width / height;
-
         gl.glViewport(0, 0, width, height);
         gl.glMatrixMode(GL10.GL_PROJECTION);
         gl.glLoadIdentity();
-        // FOV de 60 grados, rango de visión de 1 a 1000 metros
-        GLU.gluPerspective(gl, 60, aspect, 1f, 1000f);
+        GLU.gluPerspective(gl, 60, aspect, 1f, 200f); //far clipping 200m
         gl.glMatrixMode(GL10.GL_MODELVIEW);
         gl.glLoadIdentity();
     }
@@ -115,93 +128,177 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
         gl.glClear(GL10.GL_COLOR_BUFFER_BIT | GL10.GL_DEPTH_BUFFER_BIT);
         gl.glLoadIdentity();
 
-        // --- A. ACTUALIZAR LÓGICA (mover coche) ---
-        updateCarPhysics();
+        // 1. UPDATE FÍSICAS (solo avanza contador global)
+        float speed = 1.25f;
+        playerProgress += speed;
+        if (playerProgress >= routePoints.size()) playerProgress = 0;
 
-        // --- B. CÁMARA ---
-        // Ponemos la cámara detrás del coche y un poco arriba
-        // Calculamos posición cámara relativa al coche
-        float camDist = 16.0f;
-        float camHeight = 9.5f;
+        globalWheelRotation += speed * 30;
 
-        //operaciones para situar la cámara detrás según la rotación del coche
-        double rads = Math.toRadians(carRotationY);
-        float camX = carPosition.get(0) - (float)Math.sin(rads) * camDist;
-        float camZ = carPosition.get(2) - (float)Math.cos(rads) * camDist;
+        // 2. CALCULAR POSICIÓN JUGADOR (para la cámara)
+        //se precalcula antes de dibujar para saber dónde poner la cam
+        CarState playerState = calculateCarState(playerProgress);
+        playerPos = playerState.position;
+        playerRotY = playerState.rotationY;
 
-        // Actualizar vectores de cámara
-        camera.eye = new Vector4(camX, carPosition.get(1) + camHeight, camZ, 1);
-        //camera.center = carPosition; // Mirar al coche
-        camera.center = new Vector4(carPosition.get(0), carPosition.get(1) + 6.5f, carPosition.get(2), 1);
-        camera.look();
+        // 3. CÁMARA (Lógica de seguimiento)
+        updateCamera();
 
-        gl.glColor4f(1.0f, 1.0f, 1.0f, 1.0f); //reset de colores antes de dibujar
+        // 4. DIBUJAR
+        // Reset color base a blanco para texturas
+        gl.glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
 
-        // --- C. DIBUJAR ESCENA ---
-
-        // 1. DIBUJAR CIELO
+        // A. CIELO (Siempre sigue al jugador para no llegar al borde)
         gl.glDisable(GL10.GL_LIGHTING);
         gl.glPushMatrix();
-        gl.glTranslatef(carPosition.get(0), 0, carPosition.get(2));
+        gl.glTranslatef(playerPos.get(0), 0, playerPos.get(2));
         bindTexture(gl, textureIdSky);
         if(sky != null) sky.draw(gl);
         gl.glPopMatrix();
-        gl.glEnable(GL10.GL_LIGHTING); // Reactivar luces
+        gl.glEnable(GL10.GL_LIGHTING);
 
-        // 2. DIBUJAR CARRETERA
+        // B. CARRETERA
         bindTexture(gl, textureIdAtlas);
         if(road != null) road.draw(gl);
 
-        // 3. DIBUJAR ÁRBOLES Y GRADAS
-        drawDecorations(gl);
+        // C. ESCENARIO CON POP-UP (CULLING)
+        drawScenery(gl);
 
-        // 4. DIBUJAR COCHE
+        // D. COCHES (JUGADOR Y RIVALES)
+        // Jugador
+        drawCar(gl, playerProgress, 0, 0.8f); // 0 offset lateral
+
+        // Rival 1 (Adelantado, a la derecha)
+        float rival1Prog = playerProgress + 25;
+        if(rival1Prog >= routePoints.size()) rival1Prog -= routePoints.size();
+        drawCar(gl, rival1Prog, -3.5f, 0.4f); // -3.5 offset lateral
+
+        // Rival 2 (Atrasado, a la izquierda)
+        float rival2Prog = playerProgress - 15;
+        if(rival2Prog < 0) rival2Prog += routePoints.size();
+        drawCar(gl, rival2Prog, 3.5f, 0.5f);
+    }
+
+    // --- MÉTODOS DE DIBUJO ---
+    // Dibuja un coche completo en un punto concreto de la ruta
+    private void drawCar(GL10 gl, float progress, float lateralOffset, float sizeScale) {
+        // 1. Calcular dónde está este coche
+        CarState state = calculateCarState(progress);
+
         gl.glPushMatrix();
-        gl.glTranslatef(carPosition.get(0), carPosition.get(1), carPosition.get(2));
-        gl.glRotatef(carRotationY, 0, 1, 0); // Rotar chasis según dirección
+        // Traslación base
+        gl.glTranslatef(state.position.get(0), state.position.get(1), state.position.get(2));
+        // Rotación base (rumbo)
+        gl.glRotatef(state.rotationY, 0, 1, 0);
+        gl.glTranslatef(lateralOffset, 0, 0);
 
-        // Chasis
+        // Escala (opcional, para variar tamaños)
+        //gl.glScalef(sizeScale, sizeScale, sizeScale); // Descomentar si quieres coches de distinto tamaño
+
+        // Dibujar Chasis
         if(carChassis != null) carChassis.draw(gl);
 
-        // Ruedas (animación de giro y posición relativa)
-        drawWheels(gl);
+        // Dibujar Ruedas
+        drawWheels(gl, state.steeringAngle);
 
         gl.glPopMatrix();
     }
 
-    // --- FUNCIONES AUXILIARES ---
-    private void updateCarPhysics() {
-        if (routePoints.size() < 2) return;
+    private void drawWheels(GL10 gl, float steeringAngle) {
+        if(carWheel == null) return;
+        float wX = 2.0f; float wY = 1.0f; float wZ = 2.5f;
+        float toeAngle = 7.0f; //efecto ÁNGULO Toe-in "/ \"
 
-        // --- 1. AVANCE ---
-        float speed = 0.4f;
-        carProgress += speed;
-        if (carProgress >= routePoints.size() - 1) {
-            carProgress = 0;
+        // Delantera Izq
+        gl.glPushMatrix();
+        gl.glTranslatef(wX*0.8f, wY, wZ*1.35f);
+        gl.glRotatef(-toeAngle + steeringAngle, 0, 1, 0);//rotar hacia adentro (eje Y)
+        gl.glRotatef(globalWheelRotation, 1, 0, 0);//girar por velocidad (eje X)
+        carWheel.draw(gl);
+        gl.glPopMatrix();
+
+        // Delantera Der
+        gl.glPushMatrix();
+        gl.glTranslatef(-wX*0.8f, wY, wZ*1.35f);
+        gl.glRotatef(180 + toeAngle + steeringAngle, 0, 1, 0);//espejo + inclinación
+        gl.glRotatef(globalWheelRotation, 1, 0, 0);//girar velocidad
+        carWheel.draw(gl);
+        gl.glPopMatrix();
+
+        // Trasera Izq
+        gl.glPushMatrix();
+        gl.glTranslatef(-wX, wY, -wZ);
+        gl.glRotatef(globalWheelRotation, 1, 0, 0);
+        carWheel.draw(gl);
+        gl.glPopMatrix();
+
+        // Trasera Der
+        gl.glPushMatrix();
+        gl.glTranslatef(wX, wY, -wZ);
+        gl.glRotatef(180, 0, 1, 0);
+        gl.glRotatef(globalWheelRotation, 1, 0, 0);
+        carWheel.draw(gl);
+        gl.glPopMatrix();
+    }
+
+    // Recorre la lista de árboles y solo dibuja los cercanos
+    private void drawScenery(GL10 gl) {
+        bindTexture(gl, textureIdAtlas);
+
+        for (SceneryItem item : sceneryItems) {
+            // CÁLCULO DE DISTANCIA
+            float dx = item.position.get(0) - playerPos.get(0);
+            float dz = item.position.get(2) - playerPos.get(2);
+            float distSq = dx*dx + dz*dz; //distancia al cuadrado es más rápido que raíz cuadrada
+
+            // Si está dentro del rango
+            if (distSq < (RENDER_DISTANCE * RENDER_DISTANCE)) {
+                gl.glPushMatrix();
+                gl.glTranslatef(item.position.get(0), item.position.get(1), item.position.get(2));
+
+                // Rotar para que miren al centro (aprox) o aleatorio
+                if (item.type == 0 && tree != null) tree.draw(gl);
+                else if (item.type == 1 && stand != null) {
+                    gl.glRotatef(180, 0, 1, 0);
+                    stand.draw(gl);
+                }
+                gl.glPopMatrix();
+            }
         }
+    }
 
-        // --- 2. POSICIÓN E INTERPOLACIÓN ---
-        int idx = (int) carProgress;
+    // --- LÓGICA MATEMÁTICA ---
+    // Struct para devolver posición y rotación a la vez
+    private class CarState {
+        Vector4 position;
+        float rotationY;
+        float steeringAngle;
+    }
+
+    private CarState calculateCarState(float progress) {
+        CarState state = new CarState();
+        if (routePoints.isEmpty()) return state;
+
+        int idx = (int) progress;
         int nextIdx = (idx + 1) % routePoints.size();
-        float t = carProgress - idx;
+        float t = progress - idx;
 
         Vector4 p1 = routePoints.get(idx);
         Vector4 p2 = routePoints.get(nextIdx);
 
-        // Posición del coche
+        // Interpolación Posición
         float x = p1.get(0) * (1-t) + p2.get(0) * t;
         float y = p1.get(1) * (1-t) + p2.get(1) * t;
         float z = p1.get(2) * (1-t) + p2.get(2) * t;
-        carPosition = new Vector4(x, y, z, 1);
+        state.position = new Vector4(x, y, z, 1);
 
-        // --- 3. ROTACIÓN DEL CHASIS ---
+        // Rotación Chasis
         double dx = p2.get(0) - p1.get(0);
         double dz = p2.get(2) - p1.get(2);
         float currentHeading = (float) Math.toDegrees(Math.atan2(dx, dz));
-        carRotationY = currentHeading;
+        state.rotationY = currentHeading;
 
-        // --- 4. CÁLCULO DE GIRO DE RUEDAS (Look Ahead) ---
-        // Miramos hacia el SIGUIENTE segmento para anticipar la curva
+        // Rotación Volante (Look ahead)
         int nextNextIdx = (nextIdx + 1) % routePoints.size();
         Vector4 p3 = routePoints.get(nextNextIdx);
 
@@ -209,154 +306,128 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
         double dzNext = p3.get(2) - p2.get(2);
         float futureHeading = (float) Math.toDegrees(Math.atan2(dxNext, dzNext));
 
-        // Calculamos la diferencia (cuánto cambia la curva)
-        float angleDiff = futureHeading - currentHeading;
-
-        // Corregir el salto de 360 a 0 grados
+        float angleDiff = futureHeading - currentHeading;//calcular la diferencia (cuánto cambia la curva)
+        //corregir el salto de 360 a 0 grados
         while (angleDiff < -180) angleDiff += 360;
         while (angleDiff > 180) angleDiff -= 360;
 
-        // SUAVIZADO Y AMPLIFICACIÓN
-        // Multiplicar por 3.0f para que se note más el giro visualmente
-        //limitar a 40 grados para que no se rompan las ruedas
-        float targetSteer = angleDiff * 3.0f;
+        float steer = angleDiff * 7.5f; //multiplicador de la ganancia de giro para hacerlo +-pronunciado
+        //Clamp, lím máx de giro
+        if(steer > 50) steer = 50;
+        if(steer < -50) steer = -50;
+        state.steeringAngle = steer;
 
-        // Clamp (Límite máximo de giro)
-        if (targetSteer > 40) targetSteer = 40;
-        if (targetSteer < -40) targetSteer = -40;
-
-        // Interpolación simple para que el volante no tiemble
-        steeringAngle = steeringAngle * 0.8f + targetSteer * 0.5f;
-
-        // Girar ruedas sobre su eje X (velocidad)
-        wheelRotation += speed * 30;
+        return state;
     }
 
-    private void drawWheels(GL10 gl) {
-        if(carWheel == null) return;
+    private void updateCamera() {
+        if (!isOverheadView) {
+            // CÁMARA TRASERA (Juego normal)
+            float camDist = 16.0f;
+            float camHeight = 9.5f;
+            //actualizar vectores de cam
+            double rads = Math.toRadians(playerRotY);
+            float camX = playerPos.get(0) - (float)Math.sin(rads) * camDist;
+            float camZ = playerPos.get(2) - (float)Math.cos(rads) * camDist;
 
-        // Ajustes de posición
-        float wX = 2f;
-        float wY = 1.0f;
-        float wZ = 2.5f;
-
-        //efecto ÁNGULO Toe-in "/ \"
-        float toeAngle = 6.0f;
-
-        // --- Rueda Delantera Izquierda ---
-        gl.glPushMatrix();
-        gl.glTranslatef(wX*0.8f, wY, wZ*1.35f);
-        gl.glRotatef(-toeAngle + steeringAngle, 0, 1, 0); // Rotar hacia adentro (eje Y)
-        gl.glRotatef(wheelRotation, 1, 0, 0); // Girar por velocidad (eje X)
-        carWheel.draw(gl);
-        gl.glPopMatrix();
-
-        // --- Rueda Delantera Derecha ---
-        gl.glPushMatrix();
-        gl.glTranslatef(-wX*0.8f, wY, wZ*1.35f);
-        gl.glRotatef(180 + toeAngle + steeringAngle, 0, 1, 0); // Espejo + inclinación
-        gl.glRotatef(wheelRotation, 1, 0, 0);  // Girar velocidad
-        carWheel.draw(gl);
-        gl.glPopMatrix();
-
-
-        // Trasera Izquierda
-        gl.glPushMatrix();
-        gl.glTranslatef(-wX, wY, -wZ);
-        gl.glRotatef(wheelRotation, 1, 0, 0);
-        carWheel.draw(gl);
-        gl.glPopMatrix();
-
-        // Trasera Derecha
-        gl.glPushMatrix();
-        gl.glTranslatef(wX, wY, -wZ);
-        gl.glRotatef(180, 0, 1, 0);
-        gl.glRotatef(wheelRotation, 1, 0, 0);
-        carWheel.draw(gl);
-        gl.glPopMatrix();
+            camera.eye = new Vector4(camX, playerPos.get(1) + camHeight, camZ, 1);
+            camera.center = new Vector4(playerPos.get(0), playerPos.get(1) + 6.5f, playerPos.get(2), 1);
+        } else {
+            // CÁMARA ZENITAL (Mapa aéreo)
+            // Subimos mucho en Y y miramos abajo
+            camera.eye = new Vector4(playerPos.get(0), 85, playerPos.get(2), 1);
+            camera.center = playerPos;
+            camera.up = new Vector4(0, 0, -1, 0);
+        }
+        camera.look();
+        //restaurar UP vector si cambiar modo
+        if(!isOverheadView) camera.up = new Vector4(0, 1, 0, 0);
     }
 
-    private void drawDecorations(GL10 gl) {
-        bindTexture(gl, textureIdAtlas);
-        if (tree != null) {
-            gl.glPushMatrix();
-            gl.glTranslatef(20, 0, 20); // Un árbol en (20,0,20)
-            gl.glScalef(3, 3, 3);
-            tree.draw(gl);
-            gl.glPopMatrix();
+    public void toggleCameraMode() { //metodo para alternar cámara
+        isOverheadView = !isOverheadView;
+    }
+
+    // --- GENERACIÓN PROCEDURAL DE ESCENARIO ---
+    private void generateScenery() {
+        if(routePoints.isEmpty()) return;
+        Random rand = new Random();
+
+        // Recorremos la ruta y cada X pasos ponemos algo
+        for (int i = 0; i < routePoints.size(); i+= 5) { // Cada 5 puntos
+            Vector4 p = routePoints.get(i);
+            Vector4 nextP = routePoints.get((i+1)%routePoints.size());
+
+            // Vector dirección
+            float dx = nextP.get(0) - p.get(0);
+            float dz = nextP.get(2) - p.get(2);
+            // Normalizar
+            float len = (float)Math.sqrt(dx*dx + dz*dz);
+            dx /= len; dz /= len;
+
+            // Vector perpendicular (Izquierda/Derecha)
+            float perpX = -dz;
+            float perpZ = dx;
+
+            // LADO DERECHO (Árboles)
+            if (rand.nextFloat() > 0.3f) { // 70% probabilidad
+                float dist = 15 + rand.nextFloat() * 20; // Entre 15 y 35 metros del centro
+                float objX = p.get(0) + perpX * dist;
+                float objZ = p.get(2) + perpZ * dist;
+                sceneryItems.add(new SceneryItem(new Vector4(objX, p.get(1), objZ, 1), 0)); // Tipo 0 = Árbol
+            }
+
+            // LADO IZQUIERDO (Gradas a veces, árboles otras)
+            if (rand.nextFloat() > 0.5f) {
+                float dist = -15 - rand.nextFloat() * 15; // Lado contrario (negativo)
+                float objX = p.get(0) + perpX * dist;
+                float objZ = p.get(2) + perpZ * dist;
+
+                // Tipo 1 (Grada) si toca, o 0 (Árbol)
+                int type = (rand.nextFloat() > 0.8f) ? 1 : 0;
+                sceneryItems.add(new SceneryItem(new Vector4(objX, p.get(1), objZ, 1), type));
+            }
         }
     }
 
-    // --- CARGA DE TEXTURAS SIMPLE ---
+    // --- CARGADORES DE TEXTURAS ---
     private int loadTexture(GL10 gl, Context context, int resourceId) {
         int[] textures = new int[1];
         gl.glGenTextures(1, textures, 0);
         int textureId = textures[0];
-
         gl.glBindTexture(GL10.GL_TEXTURE_2D, textureId);
-
         gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_MIN_FILTER, GL10.GL_NEAREST);
         gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_MAG_FILTER, GL10.GL_NEAREST);
-        // REPEAT para que el cielo no se estire raro si es pequeño
         gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_WRAP_S, GL10.GL_REPEAT);
         gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_WRAP_T, GL10.GL_REPEAT);
-
         InputStream is = context.getResources().openRawResource(resourceId);
         Bitmap bitmap;
-        try {
-            bitmap = BitmapFactory.decodeStream(is);
-        } finally {
-            try { is.close(); } catch (IOException e) {}
-        }
-
+        try { bitmap = BitmapFactory.decodeStream(is); }
+        finally { try { is.close(); } catch (IOException e) {} }
         GLUtils.texImage2D(GL10.GL_TEXTURE_2D, 0, bitmap, 0);
         bitmap.recycle();
-
         return textureId;
     }
 
-    // Función auxiliar para activar texturas antes de draw
     private void bindTexture(GL10 gl, int textureId) {
         gl.glEnable(GL10.GL_TEXTURE_2D);
         gl.glBindTexture(GL10.GL_TEXTURE_2D, textureId);
     }
-
-    public float getHeight() {
-        return this.height;
-    }
-
-    public float getWidth() {
-        return this.width;
-    }
-
-    public float getZ() {
-        return Z;
-    }
-
-    public void setZ(float z) {
-        this.Z = z;
-    }
-
-    // --- PARSER ESPECIAL PARA LA RUTA ---
+    //función auxiliar para cargar el path a seguir
     private void loadRoutePoints(Context context, int resourceId) {
         InputStream inputStream = context.getResources().openRawResource(resourceId);
         BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
         String line;
         try {
             while ((line = reader.readLine()) != null) {
-                if (line.startsWith("v ")) { // solo vértices
+                if (line.startsWith("v ")) {
                     String[] parts = line.split("\\s+");
                     float x = Float.parseFloat(parts[1]);
-                    float z = Float.parseFloat(parts[2]); //blender Z es Y, y Y es Z...
+                    float z = Float.parseFloat(parts[2]);
                     float y = Float.parseFloat(parts[3]);
-
-                    // Ajuste de ejes Blender -> Android (Y-up vs Z-up swap)
-                    // En exportación se marca -Z Forward, Y Up
                     routePoints.add(new Vector4(x, z, y, 1));
                 }
             }
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+        } catch (IOException e) {}
     }
 }

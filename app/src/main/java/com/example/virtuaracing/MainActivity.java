@@ -33,16 +33,13 @@ public class MainActivity extends Activity {
         glView.onResume();
     }
 
+    // En MainActivity.java
     @Override
     public boolean onTouchEvent(MotionEvent e) {
-
-        float y = e.getY();
-
-        if (y >  myGLRenderer.getHeight() / 2) {
-            myGLRenderer.setZ(myGLRenderer.getZ()+0.1f );
-        }else{
-
-            myGLRenderer.setZ(myGLRenderer.getZ()-0.1f);
+        if (e.getAction() == MotionEvent.ACTION_DOWN) { //al tocar la pantalla
+            if (myGLRenderer != null) {
+                myGLRenderer.toggleCameraMode(); // Cambia entre vista trasera y aérea
+            }
         }
         return true;
     }
