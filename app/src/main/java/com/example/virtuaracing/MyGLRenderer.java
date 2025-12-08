@@ -58,6 +58,7 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
 
     // --- LUCES ---
     private Light sunLight;
+    private Light finishLineLight;//luz puntual para el punto 0
 
     // Variables globales de animación
     private float globalWheelRotation = 0;
@@ -104,13 +105,35 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
                             new Vector4(0, 0, 0, 1),
                             new Vector4(0, 1, 0, 0));
 
-        // Luz
+        // Luz, global y puntual foco en jugador
         gl.glEnable(GL10.GL_LIGHTING);
-        gl.glEnable(GL10.GL_LIGHT0);
+        gl.glEnable(GL10.GL_LIGHT0);//Sol
         sunLight = new Light(gl, GL10.GL_LIGHT0);
         sunLight.setPosition(new float[]{50.0f, 200.0f, 50.0f, 0.0f});
-        sunLight.setAmbientColor(new float[]{0.4f, 0.4f, 0.4f});
-        sunLight.setDiffuseColor(new float[]{1.0f, 1.0f, 1.0f});
+        sunLight.setAmbientColor(new float[]{0.25f, 0.25f, 0.25f, 1.0f});
+        sunLight.setDiffuseColor(new float[]{0.85f, 0.85f, 0.85f, 1.0f});
+
+        gl.glEnable(GL10.GL_LIGHT1);//luz foco en jugador
+        finishLineLight = new Light(gl, GL10.GL_LIGHT1);
+        if (!routePoints.isEmpty()) {
+            Vector4 startPoint = routePoints.get(0);
+            finishLineLight.setPosition(new float[]{
+                    startPoint.get(0),
+                    startPoint.get(1) + 4.0f,
+                    startPoint.get(2),
+                    1.0f
+            });
+        } else {
+            finishLineLight.setPosition(new float[]{0, 4, 0, 1.0f});
+        }
+
+        finishLineLight.setAmbientColor(new float[]{0.0f, 0.0f, 0.0f, 1.0f}); // Sin ambiente propio
+        finishLineLight.setDiffuseColor(new float[]{2.0f, 0.0f, 0.0f, 1.0f}); // Naranja/Dorado
+        finishLineLight.setSpecularColor(new float[]{2.0f, 0.0f, 0.0f, 1.0f}); // Brillo naranja
+
+        gl.glLightf(GL10.GL_LIGHT1, GL10.GL_CONSTANT_ATTENUATION, 1.0f);
+        gl.glLightf(GL10.GL_LIGHT1, GL10.GL_LINEAR_ATTENUATION, 0.03f);
+        gl.glLightf(GL10.GL_LIGHT1, GL10.GL_QUADRATIC_ATTENUATION, 0.0f);
 
         // Cargar texturas HUD
         texSpeedBG = loadTexture(gl, context, R.raw.hud_speed_bg);
